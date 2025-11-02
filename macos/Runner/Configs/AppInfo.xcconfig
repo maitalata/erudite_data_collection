@@ -8,7 +8,7 @@
 PRODUCT_NAME = erudite_data_collection
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.eruditeDataCollection
+PRODUCT_BUNDLE_IDENTIFIER = com.labsitytech.eruditeDataCollection
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2025 com.example. All rights reserved.
+PRODUCT_COPYRIGHT = "Copyright (c) 2025 Labsity Technologies. All rights reserved.";

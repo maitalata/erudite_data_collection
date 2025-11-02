@@ -74,7 +74,7 @@ class EruditeApp extends ConsumerWidget {
     final router = ref.watch(_routerProvider);
 
     return MaterialApp.router(
-      title: 'Erudite Customer Survey',
+      title: 'Erudite Data Collection',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,

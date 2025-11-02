@@ -31,20 +31,38 @@ class CustomerRepository {
 
   Future<void> saveCustomer(Customer customer, Profile profile) async {
     final now = DateTime.now().toUtc();
-    final id = customer.remoteId.isEmpty ? uuid.v4() : customer.remoteId;
+    final isNew = customer.localId == null;
+    final id = (isNew || customer.remoteId.isEmpty)
+        ? uuid.v4()
+        : customer.remoteId;
     final toSave = customer.copyWith(
       remoteId: id,
       collectorId: customer.collectorId.isEmpty
           ? profile.id
           : customer.collectorId,
       updatedAt: now,
-      createdAt: customer.createdAt.isAfter(now)
-          ? customer.createdAt
-          : customer.createdAt,
+      createdAt: isNew ? now : customer.createdAt,
       syncedAt: null,
       isDirty: true,
     );
     await _dao.upsertCustomer(toSave);
+
+    // Debug log to help trace duplicate/replace issues reported in the field.
+    try {
+      final snapshot = await _dao.fetchCustomers(
+        collectorId: profile.isAdmin ? null : profile.id,
+      );
+      _logger.d(
+        'Customer save -> localId=${toSave.localId} remoteId=$id name=${toSave.customerName}. '
+        'Total customers: ${snapshot.length}. IDs: ${snapshot.map((c) => c.remoteId).join(', ')}',
+      );
+    } catch (error, stack) {
+      _logger.w(
+        'Failed to log customer snapshot',
+        error: error,
+        stackTrace: stack,
+      );
+    }
   }
 
   Future<void> deleteCustomer(Customer customer) async {

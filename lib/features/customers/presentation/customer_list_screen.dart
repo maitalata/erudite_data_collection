@@ -9,7 +9,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../auth/controllers/auth_controller.dart';
+import '../../auth/domain/profile.dart';
 import '../controllers/customer_controller.dart';
+import '../controllers/sync_controller.dart';
+import '../data/customer_repository.dart';
 import '../domain/customer.dart';
 import '../providers.dart';
 import 'customer_form_screen.dart';
@@ -28,19 +31,84 @@ class CustomerListScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Customers'),
         actions: [
-          if (profile?.isAdmin == true)
+          if (profile?.isAdmin == true) ...[
+            IconButton(
+              tooltip: 'Refresh from Supabase',
+              icon: const Icon(Icons.cloud_sync_outlined),
+              onPressed: () async {
+                final syncController = ref.read(syncControllerProvider);
+                try {
+                  await syncController.sync();
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Latest cloud data synced locally.'),
+                      ),
+                    );
+                  }
+                } catch (error) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Cloud sync failed: $error')),
+                    );
+                  }
+                }
+              },
+            ),
             IconButton(
               tooltip: 'Export to Excel',
               icon: const Icon(Icons.file_download_outlined),
               onPressed: () => _exportCustomers(context, ref, profile!),
             ),
+          ],
           const SyncStatusBadge(),
         ],
       ),
       body: customersAsync.when(
         data: (customers) {
           if (customers.isEmpty) {
-            return const Center(child: Text('No customers captured yet'));
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'No customers found locally.',
+                      textAlign: TextAlign.center,
+                    ),
+                    if (profile?.isAdmin == true) ...[
+                      const SizedBox(height: 12),
+                      FilledButton.icon(
+                        icon: const Icon(Icons.cloud_download_outlined),
+                        label: const Text('Sync from Supabase'),
+                        onPressed: () async {
+                          final syncController = ref.read(
+                            syncControllerProvider,
+                          );
+                          try {
+                            await syncController.sync();
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Cloud customers synced.'),
+                                ),
+                              );
+                            }
+                          } catch (error) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Sync failed: $error')),
+                              );
+                            }
+                          }
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            );
           }
           return ListView.separated(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -148,45 +216,45 @@ Future<void> _exportCustomers(
     final excel = Excel.createExcel();
     final sheetName = excel.getDefaultSheet() ?? 'Customers';
     final sheet = excel[sheetName];
-    sheet.appendRow([
-      'Customer Name',
-      'Address',
-      'Phone',
-      'Email',
-      'Meter No',
-      'Account No',
-      'Pole No',
-      'Plan',
-      'Plan Unit',
-      'Plan Code',
-      'Latitude',
-      'Longitude',
-      'Created At',
-      'Updated At',
-      'Synced At',
-      'Collector',
-      'Is Deleted',
+    sheet.appendRow(<CellValue?>[
+      TextCellValue('Customer Name'),
+      TextCellValue('Address'),
+      TextCellValue('Phone'),
+      TextCellValue('Email'),
+      TextCellValue('Meter No'),
+      TextCellValue('Account No'),
+      TextCellValue('Pole No'),
+      TextCellValue('Plan'),
+      TextCellValue('Plan Unit'),
+      TextCellValue('Plan Code'),
+      TextCellValue('Latitude'),
+      TextCellValue('Longitude'),
+      TextCellValue('Created At'),
+      TextCellValue('Updated At'),
+      TextCellValue('Synced At'),
+      TextCellValue('Collector'),
+      TextCellValue('Is Deleted'),
     ]);
 
     for (final customer in customers) {
-      sheet.appendRow([
-        customer.customerName,
-        customer.address,
-        customer.phone,
-        customer.email ?? '',
-        customer.meterNo,
-        customer.accountNo,
-        customer.poleNo,
-        customer.plan.label,
-        customer.planUnit?.label ?? '',
-        customer.planCode ?? '',
-        customer.latitude?.toString() ?? '',
-        customer.longitude?.toString() ?? '',
-        customer.createdAt.toIso8601String(),
-        customer.updatedAt.toIso8601String(),
-        customer.syncedAt?.toIso8601String() ?? '',
-        customer.collectorId,
-        customer.isDeleted ? 'Yes' : 'No',
+      sheet.appendRow(<CellValue?>[
+        TextCellValue(customer.customerName),
+        TextCellValue(customer.address),
+        TextCellValue(customer.phone),
+        TextCellValue(customer.email ?? ''),
+        TextCellValue(customer.meterNo),
+        TextCellValue(customer.accountNo),
+        TextCellValue(customer.poleNo),
+        TextCellValue(customer.plan.label),
+        TextCellValue(customer.planUnit?.label ?? ''),
+        TextCellValue(customer.planCode ?? ''),
+        TextCellValue(customer.latitude?.toString() ?? ''),
+        TextCellValue(customer.longitude?.toString() ?? ''),
+        TextCellValue(customer.createdAt.toIso8601String()),
+        TextCellValue(customer.updatedAt.toIso8601String()),
+        TextCellValue(customer.syncedAt?.toIso8601String() ?? ''),
+        TextCellValue(customer.collectorId),
+        TextCellValue(customer.isDeleted ? 'Yes' : 'No'),
       ]);
     }
 

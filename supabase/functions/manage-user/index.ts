@@ -7,56 +7,128 @@ const validStatuses = new Set(["active", "inactive"]);
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Generate a deterministic length temporary password for invite-only flows.
+function generateRandomPassword(length = 32) {
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const randomValues = new Uint32Array(length);
+  crypto.getRandomValues(randomValues);
+
+  let result = "";
+  for (const value of randomValues) {
+    result += alphabet[value % alphabet.length];
+  }
+
+  return result;
+}
+
+// Scan admin user list to locate a specific email and obtain the auth user id.
+async function resolveUserByEmail(adminClient: any, email: string) {
+  const normalizedEmail = email.toLowerCase();
+  const perPage = 200;
+  const maxAttempts = 10;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const { data: filteredData, error: filteredError } =
+      await adminClient.auth.admin.listUsers({
+        email: normalizedEmail,
+        perPage: 1,
+      });
+
+    if (filteredError) {
+      return { user: null, error: filteredError };
+    }
+
+    const filteredUsers = filteredData?.users ?? [];
+    if (filteredUsers.length > 0) {
+      return { user: filteredUsers[0], error: null };
+    }
+
+    let page = 1;
+    while (true) {
+      const { data, error } = await adminClient.auth.admin.listUsers({
+        page,
+        perPage,
+      });
+
+      if (error) {
+        return { user: null, error };
+      }
+
+      const users = data?.users ?? [];
+      const match = users.find((candidate: any) => {
+        const candidateEmail = candidate?.email ?? "";
+        return candidateEmail.toLowerCase() === normalizedEmail;
+      });
+
+      if (match) {
+        return { user: match, error: null };
+      }
+
+      if (users.length < perPage) {
+        break;
+      }
+
+      page += 1;
+    }
+
+    await wait(250 * (attempt + 1));
+  }
+
+  return { user: null, error: null };
+}
+
 serve(async (req) => {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const serviceKey = Deno.env.get("SERVICE_ROLE_KEY");
-  if (!serviceKey) {
-    console.error("Missing SERVICE_ROLE_KEY");
-    return new Response("Server not configured", { status: 500 });
-  }
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const serviceKey = Deno.env.get("SERVICE_ROLE_KEY");
+    if (!serviceKey) {
+      console.error("Missing SERVICE_ROLE_KEY");
+      return new Response("Server not configured", { status: 500 });
+    }
 
-  const authHeader = req.headers.get("Authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
-    return new Response("Missing token", { status: 401 });
-  }
-  const token = authHeader.slice("Bearer ".length).trim();
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response("Missing token", { status: 401 });
+    }
+    const token = authHeader.slice("Bearer ".length).trim();
 
-  const adminClient = createClient(supabaseUrl, serviceKey, {
-    auth: { persistSession: false },
-  });
+    const adminClient = createClient(supabaseUrl, serviceKey, {
+      auth: { persistSession: false },
+    });
 
-  const {
-    data: { user },
-    error: userError,
-  } = await adminClient.auth.getUser(token);
-  if (userError || !user) {
-    return new Response("Invalid token", { status: 401 });
-  }
+    const {
+      data: { user },
+      error: userError,
+    } = await adminClient.auth.getUser(token);
+    if (userError || !user) {
+      return new Response("Invalid token", { status: 401 });
+    }
 
-  const authedClient = createClient(supabaseUrl, serviceKey, {
-    auth: { persistSession: false },
-    global: {
-      headers: { Authorization: `Bearer ${token}` },
-    },
-  });
+    const authedClient = createClient(supabaseUrl, serviceKey, {
+      auth: { persistSession: false },
+      global: {
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    });
 
-  const { data: profile, error: profileError } = await authedClient
-    .from("profiles")
-    .select("role,status")
-    .eq("id", user.id)
-    .single();
+    const { data: profile, error: profileError } = await authedClient
+      .from("profiles")
+      .select("role,status")
+      .eq("id", user.id)
+      .single();
 
-  if (profileError) {
-    console.error("Profile fetch error", profileError);
-    return new Response("Profile lookup failed", { status: 500 });
-  }
+    if (profileError) {
+      console.error("Profile fetch error", profileError);
+      return new Response("Profile lookup failed", { status: 500 });
+    }
 
-  if (profile?.role !== "admin" || profile?.status !== "active") {
-    return new Response("Forbidden", { status: 403 });
-  }
+    if (profile?.role !== "admin" || profile?.status !== "active") {
+      return new Response("Forbidden", { status: 403 });
+    }
 
-  const body = await req.json().catch(() => ({}));
-  const action = typeof body.action === "string" ? body.action : "update";
+    const body = await req.json().catch(() => ({}));
+    const action = typeof body.action === "string" ? body.action : "update";
 
   if (action === "create") {
     const email =
@@ -83,95 +155,77 @@ serve(async (req) => {
       });
     }
 
-    const metadata = fullName ? { full_name: fullName } : undefined;
+  const metadata = fullName ? { full_name: fullName } : undefined;
     let targetUserId: string | null = null;
     let userAlreadyExisted = false;
 
-    if (password) {
-      const { data: createdUser, error: createError } =
-        await adminClient.auth.admin.createUser({
-          email,
-          password,
-          email_confirm: !sendInvite,
-          user_metadata: metadata,
+    if (!password && sendInvite === false) {
+      return new Response("Password required when send_invite is false", {
+        status: 400,
+      });
+    }
+
+    const provisionalPassword = password ?? generateRandomPassword();
+    const { data: createdUser, error: createError } =
+      await adminClient.auth.admin.createUser({
+        email,
+        password: provisionalPassword,
+        email_confirm: !sendInvite,
+        user_metadata: metadata,
+      });
+
+    if (createError) {
+      if (!createError.message?.includes("already registered")) {
+        console.error("Create user error", createError);
+        return new Response(createError.message, { status: 500 });
+      }
+      userAlreadyExisted = true;
+    }
+
+    targetUserId = createdUser?.user?.id ?? null;
+
+    if (!targetUserId) {
+      const { user: resolvedUser, error: resolveError } =
+        await resolveUserByEmail(adminClient, email);
+      if (resolveError) {
+        console.error("List users error", resolveError);
+        return new Response(resolveError.message, { status: 500 });
+      }
+      targetUserId = resolvedUser?.id ?? null;
+    }
+
+    if (!targetUserId) {
+      console.error("Unable to resolve user after create", { email });
+      return new Response("Unable to resolve user", { status: 500 });
+    }
+
+    if (userAlreadyExisted) {
+      const updatePayload: Record<string, unknown> = {
+        email_confirm: !sendInvite,
+      };
+      if (metadata) {
+        updatePayload.user_metadata = metadata;
+      }
+      if (password) {
+        updatePayload.password = password;
+      }
+
+      const { error: updateError } = await adminClient.auth.admin
+        .updateUserById(targetUserId, updatePayload);
+      if (updateError) {
+        console.error("Update existing user", updateError);
+        return new Response(updateError.message, { status: 500 });
+      }
+    }
+
+    if (sendInvite) {
+      const { error: inviteError } =
+        await adminClient.auth.admin.inviteUserByEmail(email, {
+          data: metadata,
         });
-
-      if (createError) {
-        if (!createError.message?.includes("already registered")) {
-          console.error("Create user error", createError);
-          return new Response(createError.message, { status: 500 });
-        }
-        userAlreadyExisted = true;
-      }
-
-      targetUserId = createdUser?.user?.id ?? null;
-
-      if (!targetUserId) {
-        const { data: listedUsers, error: listError } =
-          await adminClient.auth.admin.listUsers({ email, perPage: 1 });
-        if (listError) {
-          console.error("List users error", listError);
-          return new Response(listError.message, { status: 500 });
-        }
-        targetUserId = listedUsers?.users?.at(0)?.id ?? null;
-      }
-
-      if (!targetUserId) {
-        return new Response(
-          "Provide a password or set send_invite=true to create a new user",
-          { status: 400 },
-        );
-      }
-
-      if (userAlreadyExisted) {
-        const { error: updateError } = await adminClient.auth.admin
-          .updateUserById(targetUserId, {
-            password,
-            user_metadata: metadata,
-            email_confirm: !sendInvite,
-          });
-        if (updateError) {
-          console.error("Update existing user password", updateError);
-          return new Response(updateError.message, { status: 500 });
-        }
-      }
-
-      if (sendInvite) {
-        const { error: inviteError } =
-          await adminClient.auth.admin.inviteUserByEmail(email, {
-            data: metadata,
-          });
-        if (inviteError && inviteError.message !== "User already registered") {
-          console.error("Invite error", inviteError);
-          return new Response(inviteError.message, { status: 500 });
-        }
-      }
-    } else {
-      const { data: inviteData, error: inviteError } = sendInvite
-        ? await adminClient.auth.admin.inviteUserByEmail(email, {
-            data: metadata,
-          })
-        : { data: null, error: null };
-
       if (inviteError && inviteError.message !== "User already registered") {
         console.error("Invite error", inviteError);
         return new Response(inviteError.message, { status: 500 });
-      }
-
-      targetUserId = inviteData?.user?.id ?? null;
-
-      if (!targetUserId) {
-        const { data: listedUsers, error: listError } =
-          await adminClient.auth.admin.listUsers({ email, perPage: 1 });
-        if (listError) {
-          console.error("List users error", listError);
-          return new Response(listError.message, { status: 500 });
-        }
-        targetUserId = listedUsers?.users?.at(0)?.id ?? null;
-      }
-
-      if (!targetUserId) {
-        return new Response("Unable to resolve user", { status: 500 });
       }
     }
 
@@ -344,4 +398,9 @@ serve(async (req) => {
     headers: { "Content-Type": "application/json" },
     status: 200,
   });
+  } catch (error) {
+    console.error("Unhandled manage-user error", error);
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return new Response(`Unexpected error: ${message}`, { status: 500 });
+  }
 });

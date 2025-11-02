@@ -337,82 +337,113 @@ class _AddUserDialogState extends ConsumerState<AddUserDialog> {
                   value: _sendInvite,
                   onChanged: _isSubmitting
                       ? null
-                      : (value) => setState(() => _sendInvite = value),
+                      : (value) => setState(() {
+                          _sendInvite = value;
+                          if (!value) {
+                            _setPassword = true;
+                          }
+                        }),
                   title: const Text('Send invite email'),
                   subtitle: const Text(
                     'Supabase will email the user to finish setup.',
                   ),
                 ),
-                SwitchListTile.adaptive(
-                  value: _setPassword,
-                  onChanged: _isSubmitting
-                      ? null
-                      : (value) {
-                          setState(() {
-                            _setPassword = value;
-                            if (!value) {
-                              _passwordController.clear();
-                              _confirmController.clear();
-                            }
-                          });
-                        },
-                  title: const Text('Set temporary password now'),
-                  subtitle: const Text(
-                    'Provide a password so the user can log in immediately.',
-                  ),
+                const SizedBox(height: 8),
+                Builder(
+                  builder: (context) {
+                    final mustSetPassword = !_sendInvite;
+                    final effectiveSetPassword =
+                        mustSetPassword || _setPassword;
+                    return SwitchListTile.adaptive(
+                      value: effectiveSetPassword,
+                      onChanged: (_isSubmitting || mustSetPassword)
+                          ? null
+                          : (value) {
+                              setState(() {
+                                _setPassword = value;
+                                if (!value) {
+                                  _passwordController.clear();
+                                  _confirmController.clear();
+                                }
+                              });
+                            },
+                      title: const Text('Set temporary password now'),
+                      subtitle: mustSetPassword
+                          ? const Text(
+                              'Required when invite email is disabled.',
+                            )
+                          : const Text(
+                              'Provide a password so the user can log in immediately.',
+                            ),
+                    );
+                  },
                 ),
-                if (_setPassword) ...[
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _passwordController,
-                    obscureText: _obscurePassword,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscurePassword
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
+                Builder(
+                  builder: (context) {
+                    final mustSetPassword = !_sendInvite;
+                    final effectiveSetPassword =
+                        mustSetPassword || _setPassword;
+                    if (!effectiveSetPassword) {
+                      return const SizedBox.shrink();
+                    }
+                    return Column(
+                      children: [
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: _passwordController,
+                          obscureText: _obscurePassword,
+                          decoration: InputDecoration(
+                            labelText: 'Password',
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _obscurePassword
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                              onPressed: () => setState(
+                                () => _obscurePassword = !_obscurePassword,
+                              ),
+                            ),
+                          ),
+                          validator: (value) {
+                            final pwd = value?.trim() ?? '';
+                            if (!(mustSetPassword || _setPassword)) return null;
+                            if (pwd.length < 8) {
+                              return 'Password must be at least 8 characters';
+                            }
+                            return null;
+                          },
                         ),
-                        onPressed: () => setState(
-                          () => _obscurePassword = !_obscurePassword,
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: _confirmController,
+                          obscureText: _obscureConfirm,
+                          decoration: InputDecoration(
+                            labelText: 'Confirm password',
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _obscureConfirm
+                                    ? Icons.visibility_outlined
+                                    : Icons.visibility_off_outlined,
+                              ),
+                              onPressed: () => setState(
+                                () => _obscureConfirm = !_obscureConfirm,
+                              ),
+                            ),
+                          ),
+                          validator: (value) {
+                            if (!(mustSetPassword || _setPassword)) return null;
+                            if (value?.trim() !=
+                                _passwordController.text.trim()) {
+                              return 'Passwords do not match';
+                            }
+                            return null;
+                          },
                         ),
-                      ),
-                    ),
-                    validator: (value) {
-                      if (!_setPassword) return null;
-                      final pwd = value?.trim() ?? '';
-                      if (pwd.length < 8) {
-                        return 'Password must be at least 8 characters';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _confirmController,
-                    obscureText: _obscureConfirm,
-                    decoration: InputDecoration(
-                      labelText: 'Confirm password',
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscureConfirm
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                        ),
-                        onPressed: () =>
-                            setState(() => _obscureConfirm = !_obscureConfirm),
-                      ),
-                    ),
-                    validator: (value) {
-                      if (!_setPassword) return null;
-                      if (value?.trim() != _passwordController.text.trim()) {
-                        return 'Passwords do not match';
-                      }
-                      return null;
-                    },
-                  ),
-                ],
+                      ],
+                    );
+                  },
+                ),
               ],
             ),
           ),
@@ -447,7 +478,11 @@ class _AddUserDialogState extends ConsumerState<AddUserDialog> {
     final remote = ref.read(customerRemoteServiceProvider);
     final email = _emailController.text.trim();
     final fullName = _nameController.text.trim();
-    final password = _setPassword ? _passwordController.text.trim() : null;
+    final mustSetPassword = !_sendInvite;
+    final shouldAttachPassword = mustSetPassword || _setPassword;
+    final password = shouldAttachPassword
+        ? _passwordController.text.trim()
+        : null;
 
     try {
       await remote.createUser(
